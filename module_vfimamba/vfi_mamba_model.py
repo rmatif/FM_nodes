@@ -1,5 +1,8 @@
+import gc
+
 import torch
 import tqdm
+import comfy.model_management as model_management
 from comfy.utils import ProgressBar
 
 from . import config as cfg
@@ -31,30 +34,42 @@ def run_vfi_mamba(
     model.eval()
     model.device()
 
-    src_video = src_video.permute(0, 3, 1, 2).to("cuda")
+    device = torch.device("cuda")
+
+    src_video = src_video.permute(0, 3, 1, 2).contiguous().cpu()
 
     out_frames: list[torch.Tensor] = []
 
-    pbar = ProgressBar(src_video.shape[0])
+    num_frames = src_video.shape[0]
+    pbar = ProgressBar(num_frames)
     for i in tqdm.tqdm(range(src_video.shape[0] - 1), "Generating frames"):
-        frame_a = src_video[i].unsqueeze(dim=0)
-        frame_b = src_video[i + 1].unsqueeze(dim=0)
+        frame_a_cpu = src_video[i].unsqueeze(dim=0)
+        frame_b_cpu = src_video[i + 1].unsqueeze(dim=0)
+        frame_a = frame_a_cpu.to(device)
+        frame_b = frame_b_cpu.to(device)
 
         padder = InputPadder(frame_a.shape, divisor=32)
         I0_, I2_ = padder.pad(frame_a, frame_b)
 
-        out_frames.append(frame_a)
+        out_frames.append(frame_a_cpu)
 
         for j in range(1, vfi_scale):
             timestep = j / vfi_scale
             out = model.inference(I0_, I2_, True, TTA=TTA, fast_TTA=TTA, scale=scale, timestep=timestep)
-            mid_frame = padder.unpad(out)
+            mid_frame = padder.unpad(out).cpu()
             out_frames.append(mid_frame)
 
-        pbar.update_absolute(i, src_video.shape[0])
+        pbar.update_absolute(i, num_frames)
 
     out_frames.append(src_video[-1].unsqueeze(0))
 
     out_tensor = torch.cat(out_frames, dim=0).permute(0, 2, 3, 1)
     print(f"{out_tensor.shape=}")
+    frame_a = frame_b = I0_ = I2_ = out = None
+    padder = None
+    del out_frames
+    del src_video
+    del model
+    gc.collect()
+    model_management.soft_empty_cache()
     return out_tensor
