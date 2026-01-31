@@ -40,7 +40,7 @@ class Model:
             if name is None:
                 name = self.name
             print(f"loading {name} ckpt")
-            self.net.load_state_dict(convert(torch.load(f"{model_path}")), strict=True)
+            self.net.load_state_dict(convert(torch.load(f"{model_path}", weights_only=False)), strict=True)
 
     @torch.no_grad()
     def hr_inference(
